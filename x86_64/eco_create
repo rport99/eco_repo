@@ -2,13 +2,15 @@
 
 # Intelligent script for managing repository updates and git operations
 # Author: System Administrator
-# Version: 1.2
+# Version: 1.3
 
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Function to print colored messages
@@ -95,12 +97,13 @@ check_prerequisites() {
     # Check if we're in a git repository
     check_git_repo
     
-    # Check for package files if using repo-add
-    if ! ls *.pkg.tar.* 2>/dev/null | grep -q . && ! ls *.pkg.tar.*.sig 2>/dev/null | grep -q .; then
-        print_message "Warning: No package files (*.pkg.tar.*) found in current directory" "$YELLOW"
-        print_message "Current directory contents:" "$YELLOW"
-        ls -la
-        
+    # Show current directory contents
+    print_message "\nCurrent directory contents:" "$CYAN"
+    ls -la | head -20
+    
+    # Check for any files to process
+    if ! ls ./* 2>/dev/null | grep -q .; then
+        print_message "Warning: No files found in current directory" "$YELLOW"
         read -p "Continue anyway? (y/N): " -n 1 -r
         echo
         [[ $REPLY =~ ^[Yy]$ ]] || exit 1
@@ -110,6 +113,33 @@ check_prerequisites() {
     if ! command -v sudo &> /dev/null; then
         print_message "Warning: sudo not found. Trying without..." "$YELLOW"
     fi
+}
+
+# Function to show what will be deleted
+show_files_to_delete() {
+    print_message "\nFiles that will be deleted (*.db):" "$YELLOW"
+    
+    # Find .db files
+    DB_FILES=$(find . -maxdepth 1 -name "*.db" -type f 2>/dev/null || true)
+    
+    if [ -n "$DB_FILES" ]; then
+        echo "$DB_FILES" | while read -r file; do
+            size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "unknown")
+            print_message "  $file ($size)" "$RED"
+        done
+        
+        DB_COUNT=$(echo "$DB_FILES" | wc -l)
+        print_message "\nTotal .db files to remove: $DB_COUNT" "$YELLOW"
+    else
+        print_message "  No .db files found." "$GREEN"
+    fi
+    
+    # Also show .db.tar.gz files that will be created/replaced
+    print_message "\nRepository files that will be created:" "$CYAN"
+    print_message "  ./eco_repo.db.tar.gz" "$CYAN"
+    print_message "  ./eco_repo.db" "$CYAN"
+    print_message "  ./eco_repo.files.tar.gz" "$CYAN"
+    print_message "  ./eco_repo.files" "$CYAN"
 }
 
 # Function to get commit message
@@ -147,30 +177,98 @@ get_commit_message() {
     fi
 }
 
-# Function to update repository database
+# Function to update repository database with the new command
 update_repo_db() {
-    print_message "\nStep 1: Updating repository database..." "$BLUE"
+    print_message "\nStep 1: Cleaning old database files..." "$BLUE"
+    
+    # Show what will be deleted
+    show_files_to_delete
+    
+    # Ask for confirmation
+    read -p "Proceed with removing *.db files? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_message "Skipping database cleanup." "$YELLOW"
+        return 0
+    fi
     
     # Check if repo-add command exists (for Arch Linux repositories)
-    if command -v repo-add &> /dev/null; then
-        # Find package files
-        PKG_FILES=(*.pkg.tar.*)
-        
-        if [ ${#PKG_FILES[@]} -gt 0 ] && [ -e "${PKG_FILES[0]}" ]; then
-            # Run repo-add with sudo if available
-            if command -v sudo &> /dev/null; then
-                sudo repo-add ./eco_repo.db.tar.gz ./*.pkg.tar.*
-            else
-                repo-add ./eco_repo.db.tar.gz ./*.pkg.tar.*
-            fi
-            check_status "Repository database updated"
-        else
-            print_message "No package files found. Skipping repo-add." "$YELLOW"
-        fi
-    else
+    if ! command -v repo-add &> /dev/null; then
         print_message "Warning: repo-add not found. Skipping repository update." "$YELLOW"
         return 0
     fi
+    
+    # Remove existing .db files
+    print_message "Removing *.db files..." "$PURPLE"
+    
+    # Count files before removal
+    DB_COUNT_BEFORE=$(find . -maxdepth 1 -name "*.db" -type f 2>/dev/null | wc -l)
+    
+    if [ "$DB_COUNT_BEFORE" -gt 0 ]; then
+        if command -v sudo &> /dev/null; then
+            sudo rm -rf *.db
+        else
+            rm -rf *.db
+        fi
+        
+        # Count files after removal
+        DB_COUNT_AFTER=$(find . -maxdepth 1 -name "*.db" -type f 2>/dev/null | wc -l)
+        
+        if [ "$DB_COUNT_AFTER" -eq 0 ]; then
+            print_message "✓ Successfully removed $DB_COUNT_BEFORE .db file(s)" "$GREEN"
+        else
+            print_message "Warning: Some .db files could not be removed" "$YELLOW"
+        fi
+    else
+        print_message "No .db files to remove" "$YELLOW"
+    fi
+    
+    print_message "\nStep 2: Updating repository database..." "$BLUE"
+    
+    # Find files to add (excluding the script itself and certain patterns)
+    FILES_TO_ADD=()
+    for file in ./*; do
+        if [[ -f "$file" ]]; then
+            filename=$(basename "$file")
+            # Skip certain files
+            if [[ "$filename" == "eco_repo.db.tar.gz" ]] || \
+               [[ "$filename" == "eco_repo.files.tar.gz" ]] || \
+               [[ "$filename" == "eco_repo.db" ]] || \
+               [[ "$filename" == "eco_repo.files" ]] || \
+               [[ "$filename" == *.sh ]] || \
+               [[ "$filename" == "README"* ]] || \
+               [[ "$filename" == "LICENSE"* ]]; then
+                print_message "Skipping: $filename" "$CYAN"
+                continue
+            fi
+            FILES_TO_ADD+=("$file")
+        fi
+    done
+    
+    if [ ${#FILES_TO_ADD[@]} -eq 0 ]; then
+        print_message "No files to add to repository" "$YELLOW"
+        return 0
+    fi
+    
+    print_message "Adding ${#FILES_TO_ADD[@]} file(s) to repository..." "$CYAN"
+    
+    # Run repo-add with all files
+    if command -v sudo &> /dev/null; then
+        sudo repo-add ./eco_repo.db.tar.gz ./*
+    else
+        repo-add ./eco_repo.db.tar.gz ./*
+    fi
+    
+    check_status "Repository database updated"
+    
+    # Show created repository files
+    print_message "\nCreated repository files:" "$GREEN"
+    for repo_file in eco_repo.db.tar.gz eco_repo.db eco_repo.files.tar.gz eco_repo.files; do
+        if [ -f "$repo_file" ]; then
+            size=$(du -h "$repo_file" 2>/dev/null | cut -f1 || echo "unknown")
+            print_message "  $repo_file ($size)" "$GREEN"
+        fi
+    done
 }
 
 # Function to perform git operations
@@ -183,15 +281,15 @@ perform_git_operations() {
         return 0
     fi
     
-    print_message "\nStep 2: Adding files to git..." "$BLUE"
+    print_message "\nStep 3: Adding files to git..." "$BLUE"
     git add .
     check_status "Files added to git" || return 1
     
-    print_message "\nStep 3: Committing changes..." "$BLUE"
+    print_message "\nStep 4: Committing changes..." "$BLUE"
     git commit -m "$commit_msg"
     check_status "Changes committed" || return 1
     
-    print_message "\nStep 4: Pushing to remote repository..." "$BLUE"
+    print_message "\nStep 5: Pushing to remote repository..." "$BLUE"
     
     # Check if we have a remote
     if ! git remote | grep -q .; then
@@ -245,13 +343,17 @@ show_summary() {
     print_message "\n📊 Operation Summary" "$BLUE"
     print_message "===================" "$BLUE"
     
-    if [ -f ./eco_repo.db.tar.gz ]; then
-        DB_SIZE=$(du -h ./eco_repo.db.tar.gz 2>/dev/null | cut -f1 || echo "unknown")
-        print_message "Repository DB size: $DB_SIZE" "$GREEN"
-    fi
-    
     # Show current directory
-    print_message "\nWorking directory: $(pwd)" "$BLUE"
+    print_message "\nWorking directory: $(pwd)" "$CYAN"
+    
+    # Show repository files
+    print_message "\nRepository files:" "$GREEN"
+    for repo_file in eco_repo.db.tar.gz eco_repo.db eco_repo.files.tar.gz eco_repo.files; do
+        if [ -f "$repo_file" ]; then
+            size=$(du -h "$repo_file" 2>/dev/null | cut -f1 || echo "unknown")
+            print_message "  $repo_file ($size)" "$GREEN"
+        fi
+    done
     
     # Show last commit
     print_message "\nLast commit:" "$BLUE"
@@ -277,12 +379,16 @@ show_help() {
     echo ""
     echo "Description:"
     echo "  This script updates the repository database and pushes changes to git."
-    echo "  It works for Arch Linux package repositories."
+    echo "  It performs:"
+    echo "  1. Removes all *.db files (sudo rm -rf *.db)"
+    echo "  2. Updates repository database (sudo repo-add ./eco_repo.db.tar.gz *)"
+    echo "  3. Git add, commit, and push"
     echo ""
     echo "Features:"
+    echo "  • Safely removes *.db files with confirmation"
     echo "  • Automatically finds git repository in parent directories"
     echo "  • Can initialize git repository if needed"
-    echo "  • Handles missing package files gracefully"
+    echo "  • Shows what files will be deleted/created"
     echo "  • Retries git push on failure"
     echo ""
     echo "Examples:"
@@ -308,6 +414,13 @@ main() {
     fi
     
     print_message "🚀 Starting repository update process..." "$BLUE"
+    print_message "========================================" "$BLUE"
+    print_message "Command sequence:" "$CYAN"
+    print_message "1. sudo rm -rf *.db" "$CYAN"
+    print_message "2. sudo repo-add ./eco_repo.db.tar.gz *" "$CYAN"
+    print_message "3. git add ." "$CYAN"
+    print_message "4. git commit -m \"message\"" "$CYAN"
+    print_message "5. git push" "$CYAN"
     print_message "========================================" "$BLUE"
     
     # Check prerequisites
