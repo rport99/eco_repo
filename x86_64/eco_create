@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Intelligent & Robust Repository Management Script for Arch/Pacman Repo
 # Version: 2.5 — Fixes pacman sync issues by ensuring:
-#   ✅ consistent repo naming (default: eco-repo)
+#   ✅ consistent repo naming (default: eco_repo)
 #   ✅ creates pacman-expected names: repo.db + repo.files (symlink or copy)
 #   ✅ supports GitLab Pages style publishing (optional: PUBLISH_DIR=public)
 #
 # Typical usage:
-#   REPO_NAME="eco-repo" DB_ARCHIVE_EXT="tar.gz" ./repo_update.sh "Update repo"
+#   REPO_NAME="eco_repo" DB_ARCHIVE_EXT="tar.gz" ./repo_update.sh "Update repo"
 #
 # If using GitLab Pages:
 #   PUBLISH_DIR="public" ./repo_update.sh
@@ -29,9 +29,9 @@ success(){ print_msg "✓ $1" "$GREEN"; }
 info(){ print_msg "ℹ $1" "$BLUE"; }
 
 # === CONFIG ===
-# IMPORTANT: pacman repos are most commonly named with hyphens, not underscores.
-# Default changed to eco-repo to match typical pacman config/server paths.
-REPO_NAME="${REPO_NAME:-eco-repo}"
+# IMPORTANT: using '_' is fine as long as your pacman.conf and server paths match exactly.
+# Default changed to eco_repo to match your requested naming.
+REPO_NAME="${REPO_NAME:-eco_repo}"
 
 # tar.gz or tar.zst etc. Keep this aligned with how you host it.
 DB_ARCHIVE_EXT="${DB_ARCHIVE_EXT:-tar.gz}"
@@ -196,10 +196,9 @@ main() {
   require_cmd sed
   require_cmd find
 
-  # Sanity warning: underscores often cause mismatches with hosted paths/config
+  # Note: using '_' is fine as long as pacman.conf and server filenames match exactly.
   if [[ "$REPO_NAME" == *"_"* ]]; then
-    warn "REPO_NAME contains '_' (underscore). If your pacman config/URL uses '-', you will get sync errors."
-    warn "Consider: REPO_NAME='${REPO_NAME//_/-}'"
+    info "Repo name uses '_' (underscore): ensure pacman.conf and your server paths match exactly."
   fi
 
   detect_remote_service
